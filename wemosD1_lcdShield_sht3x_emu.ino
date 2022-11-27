@@ -1,26 +1,72 @@
-#include "Wire.h"
+// Emulation of SHT3x over I2C, set using LCD+Buttons
+// LCD Shield with buttons on WeMos D1 WiFi - comment out WEMOS_D1 for normal arduino pinout
+#define WEMOS_D1 1
 
-void setup()
+#include <Wire.h>
+#include <LiquidCrystal.h>
+
+// WeMos D1 GPIO to Arduino Uno GPIO map
+// Not sure about the doubles - this is as shown on the silkscreen...
+const int D1_GPIOMAP[14] =
 {
-    pinMode(LED_BUILTIN, OUTPUT);
+     3, 1,16, 5,
+     4,14,12,13,
+     0, 2,15,13,
+    12,14
+};
 
+typedef enum
+{
+    BTN_NONE = 0,
+    BTN_LEFT,
+    BTN_DOWN,
+    BTN_UP,
+    BTN_RIGHT,
+    BTN_SELECT
+} teButtons;
+
+#ifdef WEMOS_D1
+const int LCD_D4 = D1_GPIOMAP[4];
+const int LCD_D5 = D1_GPIOMAP[5];
+const int LCD_D6 = D1_GPIOMAP[6];
+const int LCD_D7 = D1_GPIOMAP[7];
+const int LCD_RS = D1_GPIOMAP[8];
+const int LCD_EN = D1_GPIOMAP[9];
+const int LCD_BL = D1_GPIOMAP[10];
+#else
+const int LCD_D4 = 4;
+const int LCD_D5 = 5;
+const int LCD_D6 = 6;
+const int LCD_D7 = 7;
+const int LCD_RS = 8;
+const int LCD_EN = 9;
+const int LCD_BL = 10;
+#endif
+LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+
+void setup() 
+{
     Serial.begin(115200);
+    Serial.println("SHT30 Emulator (LCD shield)");
 
-    Serial.write("SHT30 Emulator\r\n");
-
-    // CRC 0xBEEF = 0x92 test
-//    uint8_t test[2] = { 0xBE, 0xEF };
-//    uint8_t crc = crcGen(test, 2);
-//    Serial.write("0xBEEF CRC = ");
-//    Serial.print(crc, HEX);
-//    Serial.write("\r\n");
-    
-    //analogReadResolution(12);
-    
     // Configure I2C as slave for address 0x44 (SHT3x address A)
+#ifdef WEMOS_D1
+    Wire.begin(0x44, 14, 15);
+#else
     Wire.begin(0x44);
+#endif
     Wire.onReceive(handleRx);
     Wire.onRequest(handleReq);
+
+    pinMode(LED_BUILTIN, OUTPUT);
+    pinMode(LCD_BL, OUTPUT);
+    digitalWrite(LCD_BL, HIGH);       // HIGH for on
+    digitalWrite(LED_BUILTIN, HIGH);  // HIGH for off
+    
+    lcd.begin(16, 2);
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("SHT30 Emulator");
 }
 
 typedef enum : uint16_t
@@ -68,8 +114,22 @@ typedef enum : uint16_t
 } teCommands;
 
 teCommands i2cCommand = CMD_NONE;
-float temperature;
-float rh;
+float temperature = 21.0f;
+float rh = 50.0f;
+
+teButtons GetButton()
+{
+    int raw = analogRead(A0);
+    Serial.print("Buttons raw: ");
+    Serial.println(raw);
+    
+    if (raw > 900)  return BTN_NONE;  // Typ 1024
+    if (raw > 700)  return BTN_SELECT;// ???
+    if (raw > 500)  return BTN_LEFT;  // Typ 678
+    if (raw > 300)  return BTN_DOWN;  // Typ 429
+    if (raw > 100)  return BTN_UP;    // Typ 173
+    return BTN_RIGHT; // Typ 6
+}
 
 void handleRx(int len)
 {
@@ -196,11 +256,160 @@ bool outputU16(uint16_t val)
     return false;
 }
 
-void loop()
-{ 
-    // Read potentiometers and update local (10bit 5V ADC)
-    temperature = ((float)analogRead(A0) / 1023.0f) * 70.0f - 20.0f;  // scale -20 to +50 °C
-    rh = ((float)analogRead(A1) / 1023.0f) * 100.0f;  // Scale 0 to 100%
+typedef enum
+{
+    MENU_TEMPERATURE = 0,
+    MENU_RH,
+    
+    MENU_MAX
+} teMenus;
+
+teMenus menu = MENU_TEMPERATURE;
+
+void DisplayCurrent()
+{
+    lcd.clear();
+    lcd.setCursor(0,0);
+    
+    switch (menu)
+    {
+    case MENU_RH:
+        lcd.print("Set RH %");
+        lcd.setCursor(0,1);
+        lcd.print(rh);
+        break;
+    
+    case MENU_TEMPERATURE:
+        lcd.print("Set temp degC");
+        lcd.setCursor(0,1);
+        lcd.print(temperature);
+        break;
+    }
+}
+
+void IncMenu()
+{
+    menu = static_cast<teMenus>(menu + 1);
+    if (menu >= MENU_MAX)
+    {
+        menu = static_cast<teMenus>(0);
+    }
+    DisplayCurrent();
+    Serial.print("Menu ");
+    Serial.println(menu);
+}
+
+void DecMenu()
+{
+    if (0 == (int)menu)
+    {
+        menu = static_cast<teMenus>(MENU_MAX - 1);
+    }
+    else
+    {
+        menu = static_cast<teMenus>(menu - 1);
+    }
+    DisplayCurrent();
+    Serial.print("Menu ");
+    Serial.println(menu);
+}
+
+void IncValue()
+{
+    Serial.print("Value ");
+  
+    switch (menu)
+    {
+    case MENU_RH:
+        rh += 1.0f;
+        if (rh > 100.0f)
+        {
+            rh = 100.0f;
+        }
+        Serial.println(rh);
+        break;
+
+    case MENU_TEMPERATURE:
+        temperature += 1.0f;
+        if (temperature > 50.0f)
+        {
+            temperature = 50.0f;
+        }
+        Serial.println(temperature);
+        break;
+    }
+
+    DisplayCurrent();
+}
+
+void DecValue()
+{
+    Serial.print("Value ");
+    
+    switch (menu)
+    {
+    case MENU_RH:
+        rh -= 1.0f;
+        if (rh < 0.0f)
+        {
+            rh = 0.0f;
+        }
+        Serial.println(rh);
+        break;
+
+    case MENU_TEMPERATURE:
+        temperature -= 1.0f;
+        if (temperature < -20.0f)
+        {
+            temperature = -20.0f;
+        }
+        Serial.println(temperature);
+        break;
+    }
+
+    DisplayCurrent();
+}
+
+teButtons lastButton = BTN_NONE;
+uint32_t lastButtonChange = 0;
+uint32_t upticks = 0;
+
+void loop() 
+{
+    auto button = GetButton();
+    int heldTime = 0;
+    if (button != lastButton)
+    {
+        lastButtonChange = upticks;
+        lastButton = button;
+        digitalWrite(LCD_BL, HIGH); // Turn on backlight
+    }
+    else
+    {
+        heldTime = (upticks - lastButtonChange);
+        Serial.print("Held time ");
+        Serial.println(heldTime);
+        if (heldTime < 10)
+        {
+            button = BTN_NONE;
+        }
+    }
+    
+    switch (button)
+    {
+    case BTN_LEFT:  DecMenu();  break;
+    case BTN_RIGHT: IncMenu();  break;
+    case BTN_UP:    IncValue(); break;
+    case BTN_DOWN:  DecValue(); break;
+
+    case BTN_NONE:
+        if (heldTime > 300) // 30 sec
+        {
+            digitalWrite(LCD_BL, LOW); // Turn off backlight
+        }
+        break;
+    }
+
+    upticks++;
     delay(100);
-    digitalWrite(LED_BUILTIN, LOW);
 }
