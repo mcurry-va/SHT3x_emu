@@ -1,6 +1,6 @@
 // Emulation of SHT3x over I2C, set using LCD+Buttons
 // LCD Shield with buttons on WeMos D1 WiFi - comment out WEMOS_D1 for normal arduino pinout
-#define WEMOS_D1 1
+//#define WEMOS_D1 1
 
 #include <Wire.h>
 #include <LiquidCrystal.h>
@@ -122,13 +122,22 @@ teButtons GetButton()
     int raw = analogRead(A0);
     Serial.print("Buttons raw: ");
     Serial.println(raw);
-    
+
+#ifdef WEMOS_D1
     if (raw > 900)  return BTN_NONE;  // Typ 1024
     if (raw > 700)  return BTN_SELECT;// ???
     if (raw > 500)  return BTN_LEFT;  // Typ 678
     if (raw > 300)  return BTN_DOWN;  // Typ 429
     if (raw > 100)  return BTN_UP;    // Typ 173
     return BTN_RIGHT; // Typ 6
+#else
+    if (raw > 750)  return BTN_NONE;  // Typ 1023
+    if (raw > 550)  return BTN_SELECT;// Typ 639
+    if (raw > 350)  return BTN_LEFT;  // Typ 409
+    if (raw > 150)  return BTN_DOWN;  // Typ 256
+    if (raw > 50)   return BTN_UP;    // Typ 99
+    return BTN_RIGHT; // Typ 0
+#endif
 }
 
 void handleRx(int len)
